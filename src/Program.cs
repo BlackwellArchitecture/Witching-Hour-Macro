@@ -1196,6 +1196,7 @@ namespace WitchingHourBringer
     {
         private readonly SystemTimeController _timeController = new SystemTimeController();
         private readonly System.Windows.Forms.Timer _uiTimer;
+        private readonly Stopwatch _animWatch = Stopwatch.StartNew();
         private readonly PurpleActionButton _actionButton;
         private readonly DarkCheckToggle _pinToggle;
 
@@ -1208,7 +1209,7 @@ namespace WitchingHourBringer
         private string _statusDetail = "Sets system time to 2:59:55 AM, waits until 3:01 AM,\nthen restores Windows Automatic Time.";
         private bool _statusIsError;
         private float _progress;
-        private float _pulseStep;
+        private int _lastClockSecond = -1;
         private bool _isRestoring;
 #if PREVIEW_MODE
         private DateTime? _previewClockOverride;
@@ -1268,7 +1269,7 @@ namespace WitchingHourBringer
             Controls.Add(_pinToggle);
 
             _uiTimer = new System.Windows.Forms.Timer();
-            _uiTimer.Interval = 100;
+            _uiTimer.Interval = 33;
             _uiTimer.Tick += OnUiTimerTick;
             _uiTimer.Start();
 
@@ -1384,18 +1385,24 @@ namespace WitchingHourBringer
         {
             if (_phase == MacroPhase.WitchingHourActive || _phase == MacroPhase.CountingToWitchingHour)
             {
-                _pulseStep += 0.14f;
                 EvaluateAndRefreshState();
             }
             else if (_phase == MacroPhase.Restoring)
             {
-                _pulseStep += 0.16f;
                 Invalidate();
             }
             else
             {
-                // Keep live system clock updated every second smoothly
-                Invalidate(new Rectangle(S(244), S(76), S(354), S(48)));
+                // Smoothly animate the floating Witching Hour skeleton & seamless aura on the left
+                Invalidate(new Rectangle(0, 0, S(244), ClientSize.Height));
+
+                // Redraw the live system clock row only when the second changes
+                int sec = DateTime.Now.Second;
+                if (sec != _lastClockSecond)
+                {
+                    _lastClockSecond = sec;
+                    Invalidate(new Rectangle(S(244), S(76), S(354), S(44)));
+                }
             }
         }
 
@@ -1489,16 +1496,13 @@ namespace WitchingHourBringer
                 g.FillRectangle(bgBrush, fullRect);
             }
 
-            // Subtle ambient violet glow top-left behind the entity panel
-            DrawAmbientBackgroundGlow(g);
-
-            // 2. Left side: Witching Hour Entity Showcase Card
+            // 2. Left side: Seamless floating Witching Hour entity & aura (no border)
             DrawEntityPanel(g);
 
             // 3. Right side: Header
             DrawHeader(g);
 
-            // 4. Right side: Live System Time Card
+            // 4. Right side: Live System Time Row
             DrawSystemClockCard(g);
 
             // 5. Right side: Countdown / Status Card
@@ -1508,105 +1512,78 @@ namespace WitchingHourBringer
             DrawFooterStatus(g);
         }
 
-        private void DrawAmbientBackgroundGlow(Graphics g)
-        {
-            RectangleF glowRect = new RectangleF(Sf(-40), Sf(-30), Sf(340), Sf(340));
-            using (GraphicsPath gp = new GraphicsPath())
-            {
-                gp.AddEllipse(glowRect);
-                using (PathGradientBrush pgb = new PathGradientBrush(gp))
-                {
-                    int alpha = _phase == MacroPhase.WitchingHourActive
-                        ? (int)(40 + 14 * Math.Sin(_pulseStep))
-                        : 22;
-                    Color core = _phase == MacroPhase.WitchingHourActive
-                        ? Color.FromArgb(alpha, 224, 56, 204)
-                        : Color.FromArgb(alpha, 134, 48, 240);
-                    pgb.CenterColor = core;
-                    pgb.SurroundColors = new Color[] { Color.FromArgb(0, 14, 8, 24) };
-                    g.FillEllipse(pgb, glowRect);
-                }
-            }
-        }
-
         private void DrawEntityPanel(Graphics g)
         {
-            RectangleF panelRect = new RectangleF(Sf(16), Sf(16), Sf(210), Sf(306));
-            float radius = Sf(14);
+            RectangleF zoneRect = new RectangleF(Sf(16), Sf(14), Sf(210), Sf(310));
 
-            using (GraphicsPath path = Theme.CreateRoundedRect(panelRect, radius))
+            double t = _animWatch.Elapsed.TotalSeconds;
+            bool isWitching = (_phase == MacroPhase.WitchingHourActive);
+            bool isCounting = (_phase == MacroPhase.CountingToWitchingHour);
+
+            float bobOffset = isWitching
+                ? (float)(Math.Sin(t * 2.35) * 6.5)
+                : (float)(Math.Sin(t * 1.85) * 5.2);
+            float pulse = (float)(0.5 + 0.5 * Math.Sin(t * 2.1));
+
+#if PREVIEW_MODE
+            if (_previewClockOverride.HasValue)
             {
-                using (LinearGradientBrush cardFill = new LinearGradientBrush(
-                    panelRect,
-                    Color.FromArgb(24, 13, 39),
-                    Color.FromArgb(14, 8, 24),
-                    LinearGradientMode.Vertical))
-                {
-                    g.FillPath(cardFill, path);
-                }
+                bobOffset = 0f;
+                pulse = 0.72f;
+            }
+#endif
 
-                // Clip inside rounded card so aura & entity stay crisp inside the frame
-                GraphicsState state = g.Save();
-                g.SetClip(path);
+            // Wide seamless radial violet/magenta aura that fades completely into the window background
+            float auraCenterX = zoneRect.X + zoneRect.Width / 2f;
+            float auraCenterY = zoneRect.Y + zoneRect.Height / 2f + Sf(bobOffset * 0.4f);
+            float auraW = Sf(244);
+            float auraH = Sf(320);
+            RectangleF auraRect = new RectangleF(
+                auraCenterX - auraW / 2f,
+                auraCenterY - auraH / 2f,
+                auraW,
+                auraH);
 
-                // Radial violet/magenta aura behind the Witching Hour figure
-                RectangleF auraRect = new RectangleF(
-                    panelRect.X - Sf(15),
-                    panelRect.Y + Sf(8),
-                    panelRect.Width + Sf(30),
-                    panelRect.Height - Sf(16));
-                using (GraphicsPath auraPath = new GraphicsPath())
+            using (GraphicsPath auraPath = new GraphicsPath())
+            {
+                auraPath.AddEllipse(auraRect);
+                using (PathGradientBrush aura = new PathGradientBrush(auraPath))
                 {
-                    auraPath.AddEllipse(auraRect);
-                    using (PathGradientBrush aura = new PathGradientBrush(auraPath))
+                    if (isWitching)
                     {
-                        float pulse = (float)(0.5 + 0.5 * Math.Sin(_pulseStep));
-                        if (_phase == MacroPhase.WitchingHourActive)
-                        {
-                            aura.CenterColor = Color.FromArgb((int)(110 + 45 * pulse), 232, 54, 210);
-                        }
-                        else if (_phase == MacroPhase.CountingToWitchingHour)
-                        {
-                            aura.CenterColor = Color.FromArgb((int)(88 + 22 * pulse), 156, 56, 245);
-                        }
-                        else
-                        {
-                            aura.CenterColor = Color.FromArgb(78, 136, 48, 232);
-                        }
-                        aura.SurroundColors = new Color[] { Color.FromArgb(0, 16, 9, 28) };
-                        g.FillEllipse(aura, auraRect);
+                        aura.CenterColor = Color.FromArgb((int)(96 + 38 * pulse), 228, 52, 206);
                     }
+                    else if (isCounting)
+                    {
+                        aura.CenterColor = Color.FromArgb((int)(78 + 22 * pulse), 152, 54, 244);
+                    }
+                    else
+                    {
+                        aura.CenterColor = Color.FromArgb((int)(66 + 14 * pulse), 134, 48, 232);
+                    }
+                    aura.SurroundColors = new Color[] { Color.FromArgb(0, 14, 8, 24) };
+                    g.FillEllipse(aura, auraRect);
                 }
+            }
 
-                // Draw provided Witching Hour image centered cleanly preserving aspect ratio
-                if (_entityImage != null)
-                {
-                    float padX = Sf(12);
-                    float padY = Sf(14);
-                    float maxW = panelRect.Width - padX * 2f;
-                    float maxH = panelRect.Height - padY * 2f;
+            // Draw Witching Hour skeleton floating smoothly with aspect ratio preserved
+            if (_entityImage != null)
+            {
+                float padX = Sf(12);
+                float padY = Sf(18);
+                float maxW = zoneRect.Width - padX * 2f;
+                float maxH = zoneRect.Height - padY * 2f;
 
-                    float ratioX = maxW / _entityImage.Width;
-                    float ratioY = maxH / _entityImage.Height;
-                    float ratio = Math.Min(ratioX, ratioY);
+                float ratioX = maxW / _entityImage.Width;
+                float ratioY = maxH / _entityImage.Height;
+                float ratio = Math.Min(ratioX, ratioY);
 
-                    float drawW = _entityImage.Width * ratio;
-                    float drawH = _entityImage.Height * ratio;
-                    float drawX = panelRect.X + (panelRect.Width - drawW) / 2f;
-                    float drawY = panelRect.Y + (panelRect.Height - drawH) / 2f;
+                float drawW = _entityImage.Width * ratio;
+                float drawH = _entityImage.Height * ratio;
+                float drawX = zoneRect.X + (zoneRect.Width - drawW) / 2f;
+                float drawY = zoneRect.Y + (zoneRect.Height - drawH) / 2f + Sf(bobOffset);
 
-                    g.DrawImage(_entityImage, new RectangleF(drawX, drawY, drawW, drawH));
-                }
-
-                g.Restore(state);
-
-                Color borderColor = _phase == MacroPhase.WitchingHourActive
-                    ? Theme.CardBorderWitching
-                    : (_phase == MacroPhase.CountingToWitchingHour ? Theme.CardBorderActive : Theme.CardBorder);
-                using (Pen borderPen = new Pen(borderColor, Sf(1.3f)))
-                {
-                    g.DrawPath(borderPen, path);
-                }
+                g.DrawImage(_entityImage, new RectangleF(drawX, drawY, drawW, drawH));
             }
         }
 
