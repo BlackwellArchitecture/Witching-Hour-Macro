@@ -1,0 +1,8 @@
+*.user
+*.suo
+*.pdb
+.vs/
+__pycache__/
+*.pyc
+Thumbs.db
+desktop.ini
